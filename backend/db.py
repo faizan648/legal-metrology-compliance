@@ -39,7 +39,6 @@ class LocalCollection:
                     return False
                 continue
             
-            # Dot notation support (e.g. "compliance.verdict")
             parts = k.split(".")
             curr = item
             found = True
@@ -58,15 +57,11 @@ class LocalCollection:
                     pattern = v["$regex"]
                     flags = v.get("$options", "")
                     import re
-                    reg_flags = re.IGNORECASE if "i" in flags else 0
-                    if not curr or not isinstance(curr, str) or not re.search(pattern, curr, reg_flags):
+                    regex_flags = re.IGNORECASE if "i" in flags else 0
+                    if not re.search(pattern, str(curr), regex_flags):
                         return False
-                elif "$in" in v:
-                    if curr not in v["$in"]:
-                        return False
-            else:
-                if curr != v:
-                    return False
+            elif curr != v:
+                return False
         return True
 
     async def find_one(self, query: Dict[str, Any], projection: Optional[Dict[str, int]] = None) -> Optional[Dict[str, Any]]:
@@ -84,24 +79,29 @@ class LocalCollection:
                 return res
         return None
 
-    async def insert_one(self, doc: Dict[str, Any]):
+    def find(self, query: Dict[str, Any], projection: Optional[Dict[str, int]] = None):
         items = self._read_all()
-        doc_copy = dict(doc)
+        return LocalCursor(items, query, projection)
+
+    async def insert_one(self, document: Dict[str, Any]):
+        items = self._read_all()
+        doc_copy = dict(document)
         if "_id" not in doc_copy:
             doc_copy["_id"] = str(uuid.uuid4())
         items.append(doc_copy)
         self._write_all(items)
-        return doc_copy
+        class Result:
+            inserted_id = doc_copy["_id"]
+        return Result()
 
     async def update_one(self, query: Dict[str, Any], update: Dict[str, Any]):
         items = self._read_all()
         updated = False
-        for i, item in enumerate(items):
+        for item in items:
             if self._match(item, query):
                 if "$set" in update:
                     for k, v in update["$set"].items():
                         item[k] = v
-                items[i] = item
                 updated = True
                 break
         if updated:
@@ -116,67 +116,29 @@ class LocalCollection:
         items = self._read_all()
         return sum(1 for item in items if self._match(item, query))
 
-    async def create_index(self, key: str, unique: bool = False):
-        pass
-
-    def find(self, query: Dict[str, Any], projection: Optional[Dict[str, int]] = None):
-        return LocalCursor(self._read_all(), query, projection)
-
     async def aggregate(self, pipeline: List[Dict[str, Any]]):
         items = self._read_all()
         cur_data = list(items)
         for step in pipeline:
             if "$match" in step:
-                cur_data = [item for item in cur_data if self._match(item, step["$match"])]
-            elif "$unwind" in step:
-                field_path = step["$unwind"].lstrip("$")
-                unwound = []
-                for item in cur_data:
-                    parts = field_path.split(".")
-                    val = item
-                    for p in parts:
-                        val = val.get(p) if isinstance(val, dict) else None
-                    if isinstance(val, list):
-                        for elem in val:
-                            new_item = dict(item)
-                            new_item[parts[-1]] = elem
-                            unwound.append(new_item)
-                cur_data = unwound
+                cur_data = [d for d in cur_data if self._match(d, step["$match"])]
             elif "$group" in step:
-                grp = step["$group"]
+                gspec = step["$group"]
+                gid = gspec.get("_id")
                 groups = {}
-                for item in cur_data:
-                    # evaluate group _id
-                    gid = grp["_id"]
-                    if isinstance(gid, str) and gid.startswith("$"):
-                        fpath = gid[1:].split(".")
-                        gval = item
-                        for p in fpath:
-                            gval = gval.get(p) if isinstance(gval, dict) else None
-                    elif isinstance(gid, dict) and "$substr" in gid:
-                        field_ref, start, length = gid["$substr"]
-                        fpath = field_ref[1:].split(".")
-                        gval = item
-                        for p in fpath:
-                            gval = gval.get(p) if isinstance(gval, dict) else None
-                        gval = str(gval)[start:start+length] if gval else None
-                    else:
-                        gval = gid
-
-                    key_str = str(gval)
-                    if key_str not in groups:
-                        groups[key_str] = {"_id": gval, "count": 0, "total": 0, "compliant": 0, "items": []}
-                    groups[key_str]["count"] += 1
-                    groups[key_str]["items"].append(item)
-                    
-                    if "total" in grp:
-                        groups[key_str]["total"] += 1
-                    if "compliant" in grp:
-                        cond = grp["compliant"].get("$sum", {}).get("$cond", [])
-                        if cond and cond[0].get("$eq") == ["$compliance.verdict", "COMPLIANT"]:
-                            if item.get("compliance", {}).get("verdict") == "COMPLIANT":
-                                groups[key_str]["compliant"] += 1
-
+                for d in cur_data:
+                    key_val = d.get(gid.replace("$", "")) if isinstance(gid, str) and gid.startswith("$") else None
+                    if key_val not in groups:
+                        groups[key_val] = {"_id": key_val}
+                    for field, expr in gspec.items():
+                        if field == "_id": continue
+                        if "$sum" in expr:
+                            val = expr["$sum"]
+                            groups[key_val][field] = groups[key_val].get(field, 0) + (1 if val == 1 else 0)
+                        elif "$avg" in expr:
+                            arg = expr["$avg"].replace("$", "")
+                            groups[key_val].setdefault("_vals", []).append(d.get(arg, 0))
+                            groups[key_val][field] = sum(groups[key_val]["_vals"]) / len(groups[key_val]["_vals"])
                 cur_data = list(groups.values())
             elif "$sort" in step:
                 sort_spec = step["$sort"]
@@ -198,7 +160,7 @@ class LocalCollection:
 
 class LocalCursor:
     def __init__(self, items: List[Dict[str, Any]], query: Dict[str, Any], projection: Optional[Dict[str, int]] = None):
-        self.coll = LocalCollection(Path("data_dummy.json")) # reference for matching logic
+        self.coll = LocalCollection(Path("data_dummy.json"))
         self.items = [item for item in items if self.coll._match(item, query)]
         self.projection = projection
 
@@ -236,8 +198,12 @@ def get_database():
     if mongo_url:
         try:
             from motor.motor_asyncio import AsyncIOMotorClient
+            import certifi
             logger.info(f"Using MongoDB via Motor client for database '{db_name}'")
-            client = AsyncIOMotorClient(mongo_url)
+            try:
+                client = AsyncIOMotorClient(mongo_url, tlsCAFile=certifi.where())
+            except Exception:
+                client = AsyncIOMotorClient(mongo_url)
             return client, client[db_name]
         except Exception as e:
             logger.warning(f"Motor MongoDB connection failed: {e}. Falling back to local JSON DB.")
@@ -246,4 +212,3 @@ def get_database():
     data_dir = Path(__file__).parent / "data"
     db = LocalDB(data_dir)
     return None, db
-
