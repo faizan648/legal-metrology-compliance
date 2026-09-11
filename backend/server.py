@@ -359,10 +359,14 @@ async def shutdown():
 
 app.include_router(api)
 
+cors_origins_raw = os.environ.get("CORS_ORIGINS", "*")
+origins = [o.strip() for o in cors_origins_raw.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
+    allow_origins=origins if "*" not in origins else ["*"],
+    allow_origin_regex=r"https?://.*",
     allow_methods=["*"],
     allow_headers=["*"],
 )
