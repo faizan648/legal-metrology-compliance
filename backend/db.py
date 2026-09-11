@@ -230,31 +230,20 @@ class LocalDB:
         self.scans = LocalCollection(data_dir / "scans.json")
 
 def get_database():
-    mongo_url = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
-    db_name = os.environ.get("DB_NAME", "legal_metrology")
+    mongo_url = os.environ.get("MONGO_URL", "").strip()
+    db_name = os.environ.get("DB_NAME", "legal_metrology").strip()
     
-    # Try motor first if MONGO_URL is provided, else fallback to LocalDB
-    use_motor = False
-    try:
-        from motor.motor_asyncio import AsyncIOMotorClient
-        # Attempt quick sync socket check
-        import socket
-        host = mongo_url.split("//")[-1].split(":")[0].split("/")[0]
-        port = int(mongo_url.split(":")[-1].split("/")[0]) if ":" in mongo_url.split("//")[-1] else 27017
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(0.5)
-        if s.connect_ex((host, port)) == 0:
-            use_motor = True
-        s.close()
-    except Exception:
-        use_motor = False
+    if mongo_url:
+        try:
+            from motor.motor_asyncio import AsyncIOMotorClient
+            logger.info(f"Using MongoDB via Motor client for database '{db_name}'")
+            client = AsyncIOMotorClient(mongo_url)
+            return client, client[db_name]
+        except Exception as e:
+            logger.warning(f"Motor MongoDB connection failed: {e}. Falling back to local JSON DB.")
+    
+    logger.info("MONGO_URL not configured. Falling back to local JSON database storage")
+    data_dir = Path(__file__).parent / "data"
+    db = LocalDB(data_dir)
+    return None, db
 
-    if use_motor:
-        logger.info("Using MongoDB via Motor client")
-        client = AsyncIOMotorClient(mongo_url)
-        return client, client[db_name]
-    else:
-        logger.info("MongoDB not connected. Falling back to local JSON database storage")
-        data_dir = Path(__file__).parent / "data"
-        db = LocalDB(data_dir)
-        return None, db

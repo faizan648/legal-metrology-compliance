@@ -8,6 +8,10 @@ services:
     envVars:
       - key: JWT_SECRET
         generateValue: true
+      - key: MONGO_URL
+        value: ""
+      - key: DB_NAME
+        value: "legal_metrology"
       - key: ADMIN_EMAIL
         value: admin@lm.gov.in
       - key: ADMIN_PASSWORD
