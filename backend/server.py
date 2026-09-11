@@ -335,10 +335,19 @@ async def _seed_users():
 
 @app.on_event("startup")
 async def startup():
-    await db.users.create_index("email", unique=True)
-    await db.scans.create_index("scanned_by")
-    await db.scans.create_index("created_at")
-    await _seed_users()
+    try:
+        if client is not None:
+            await db.users.create_index("email", unique=True)
+            await db.scans.create_index("scanned_by")
+            await db.scans.create_index("created_at")
+    except Exception as idx_err:
+        logger.warning("Index creation skipped or non-supported on DB: %s", idx_err)
+    
+    try:
+        await _seed_users()
+    except Exception as seed_err:
+        logger.warning("Seed users initialization error: %s", seed_err)
+
     logger.info("Server startup complete")
 
 
