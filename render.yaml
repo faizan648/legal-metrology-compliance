@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: lm-compliance-backend
+    env: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ADMIN_EMAIL
+        value: admin@lm.gov.in
+      - key: ADMIN_PASSWORD
+        value: admin123
+      - key: OFFICER_EMAIL
+        value: officer@lm.gov.in
+      - key: OFFICER_PASSWORD
+        value: officer123
+      - key: CORS_ORIGINS
+        value: https://lm-compliance.vercel.app
+      - key: GEMINI_API_KEY
+        value: ""
